@@ -15,6 +15,7 @@ emux mcp          → MCP server. Six tools for agents to drive
 
 emux ls           → Print registered + live sessions (non-interactive,
                     CI-friendly).
+emux watch        → Watch many registered/live sessions in one terminal.
 emux register     → Register a session under a friendly name.
 emux unregister   → Drop a registered name. Doesn't touch tmux.
 ```
@@ -167,6 +168,22 @@ emux register claude-code claude-code -d "Claude Code terminal" -t claude local
 
 Agents can then use `tmux_run(..., by_registry_name=True)` or separate
 send/capture calls against `claude-code`.
+
+## Watching many sessions
+
+Use `emux watch` to watch all registered sessions plus live unregistered tmux
+sessions in one refreshing terminal dashboard:
+
+```bash
+emux watch
+emux watch --filter claude
+emux watch --registered-only
+emux watch --once --lines 12
+```
+
+This is a watcher, not a supervisor. It repeatedly captures visible pane
+content with `tmux capture-pane`; it does not send input, create sessions, or
+decide whether a Claude Code session is blocked.
 
 ## License
 

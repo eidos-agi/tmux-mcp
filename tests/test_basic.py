@@ -309,6 +309,97 @@ def test_cmd_ls_reports_registered_live_and_stale(monkeypatch, capsys):
     assert "scratch (attached)" in out
 
 
+def test_watch_targets_include_registered_stale_and_unregistered_live():
+    from emux import cli
+
+    targets = cli._watch_targets(
+        registry={
+            "alpha": {"session": "live-session", "description": "active shell", "tags": ["claude"]},
+            "beta": {"session": "gone-session", "description": "old shell", "tags": []},
+        },
+        live=[
+            {"name": "live-session", "windows": 1, "created_unix": 10, "attached": False},
+            {"name": "scratch", "windows": 1, "created_unix": 20, "attached": True},
+        ],
+    )
+
+    assert [(t["kind"], t["name"], t["session"], t["live"]) for t in targets] == [
+        ("registered", "alpha", "live-session", True),
+        ("registered", "beta", "gone-session", False),
+        ("live", "scratch", "scratch", True),
+    ]
+
+
+def test_watch_targets_filter_and_registered_only():
+    from emux import cli
+
+    targets = cli._watch_targets(
+        registry={
+            "alpha": {"session": "live-session", "description": "Claude Code", "tags": ["claude"]},
+            "beta": {"session": "gone-session", "description": "old shell", "tags": []},
+        },
+        live=[
+            {"name": "live-session", "windows": 1, "created_unix": 10, "attached": False},
+            {"name": "scratch", "windows": 1, "created_unix": 20, "attached": True},
+        ],
+        registered_only=True,
+        needle="claude",
+    )
+
+    assert [t["name"] for t in targets] == ["alpha"]
+
+
+def test_render_watch_snapshot_shows_captures_and_stale():
+    from datetime import datetime
+
+    from emux import cli
+
+    rendered = cli._render_watch_snapshot(
+        targets=[
+            {
+                "kind": "registered",
+                "name": "alpha",
+                "session": "live-session",
+                "description": "active shell",
+                "tags": [],
+                "live": True,
+            },
+            {
+                "kind": "registered",
+                "name": "beta",
+                "session": "gone-session",
+                "description": None,
+                "tags": [],
+                "live": False,
+            },
+        ],
+        captures={"live-session": (True, "line one\nline two")},
+        lines=2,
+        now=datetime(2026, 5, 31, 12, 0, 0),
+    )
+
+    assert "emux watch  2026-05-31 12:00:00" in rendered
+    assert "=== alpha -> live-session [registered; live] — active shell" in rendered
+    assert "    line one" in rendered
+    assert "    line two" in rendered
+    assert "=== beta -> gone-session [registered; STALE]" in rendered
+    assert "tmux session is gone" in rendered
+
+
+def test_capture_session_ignores_trailing_blank_pane_rows(monkeypatch):
+    from emux import cli
+
+    def fake_run_tmux(args, timeout=10):
+        return (0, "old\nuseful one\nuseful two\n\n\n", "")
+
+    monkeypatch.setattr(cli, "_run_tmux", fake_run_tmux)
+
+    ok, content = cli._capture_session("alpha", lines=2)
+
+    assert ok is True
+    assert content == "useful one\nuseful two"
+
+
 def _tmux_available() -> bool:
     return shutil.which("tmux") is not None
 
