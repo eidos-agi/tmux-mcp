@@ -400,6 +400,110 @@ def test_capture_session_ignores_trailing_blank_pane_rows(monkeypatch):
     assert content == "useful one\nuseful two"
 
 
+def test_cmd_send_targets_registry_name_by_default(monkeypatch, capsys):
+    import argparse
+
+    from emux import cli
+
+    calls = []
+
+    async def fake_send(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "target": kwargs["target"], "resolved_session": "real-session"}
+
+    monkeypatch.setattr(cli, "tmux_send", fake_send)
+
+    rc = cli.cmd_send(argparse.Namespace(
+        target="alpha",
+        keys=["echo", "hi"],
+        no_enter=False,
+        session=False,
+        json=False,
+    ))
+
+    assert rc == 0
+    assert calls == [{
+        "target": "alpha",
+        "keys": "echo hi",
+        "enter": True,
+        "by_registry_name": True,
+    }]
+    assert "ok: alpha -> real-session" in capsys.readouterr().out
+
+
+def test_cmd_interrupt_sends_control_c_without_enter(monkeypatch):
+    import argparse
+
+    from emux import cli
+
+    calls = []
+
+    async def fake_send(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "target": kwargs["target"], "resolved_session": "real-session"}
+
+    monkeypatch.setattr(cli, "tmux_send", fake_send)
+
+    rc = cli.cmd_interrupt(argparse.Namespace(target="alpha", session=False, json=False))
+
+    assert rc == 0
+    assert calls == [{
+        "target": "alpha",
+        "keys": "C-c",
+        "enter": False,
+        "by_registry_name": True,
+    }]
+
+
+def test_cmd_capture_prints_content(monkeypatch, capsys):
+    import argparse
+
+    from emux import cli
+
+    async def fake_capture(**kwargs):
+        return {"ok": True, "content": "line one\nline two\n"}
+
+    monkeypatch.setattr(cli, "tmux_capture", fake_capture)
+
+    rc = cli.cmd_capture(argparse.Namespace(target="alpha", lines=2, session=False, json=False))
+
+    assert rc == 0
+    assert capsys.readouterr().out == "line one\nline two\n"
+
+
+def test_cmd_run_prints_content_and_supports_raw_session(monkeypatch, capsys):
+    import argparse
+
+    from emux import cli
+
+    calls = []
+
+    async def fake_run(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "content": "DONE\n"}
+
+    monkeypatch.setattr(cli, "tmux_run", fake_run)
+
+    rc = cli.cmd_run(argparse.Namespace(
+        target="raw-session",
+        command=["printf", "DONE"],
+        wait=0.1,
+        lines=5,
+        session=True,
+        json=False,
+    ))
+
+    assert rc == 0
+    assert calls == [{
+        "target": "raw-session",
+        "command": "printf DONE",
+        "wait_seconds": 0.1,
+        "capture_lines": 5,
+        "by_registry_name": False,
+    }]
+    assert capsys.readouterr().out == "DONE\n"
+
+
 def _tmux_available() -> bool:
     return shutil.which("tmux") is not None
 

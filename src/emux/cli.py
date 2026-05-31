@@ -4,6 +4,10 @@
   emux mcp          → start the MCP server
   emux register …   → CLI register
   emux ls           → list registered + live sessions
+  emux send …        → send keys to a registered/live session
+  emux interrupt …   → send C-c to a registered/live session
+  emux capture …     → capture a registered/live session
+  emux run …         → send a command, wait, and capture
   emux --version    → print version
 
 The TUI is a Textual picker. It shows registered live sessions, registered
@@ -15,7 +19,9 @@ tmux session — no further emux mediation.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import datetime as _dt
+import json
 import os
 import sys
 import time
@@ -29,6 +35,9 @@ from .server import (
     _run_tmux,
     _save_registry,
     run_mcp_server,
+    tmux_capture,
+    tmux_run,
+    tmux_send,
 )
 
 
@@ -306,6 +315,82 @@ def cmd_unregister(args: argparse.Namespace) -> int:
     return 0
 
 
+def _joined_words(words: list[str], field_name: str) -> str:
+    value = " ".join(words).strip()
+    if not value:
+        raise SystemExit(f"emux: {field_name} is required")
+    return value
+
+
+def _print_result(result: dict[str, Any], as_json: bool = False, content_key: str | None = None) -> int:
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    elif result.get("ok") and content_key and content_key in result:
+        print(result[content_key], end="" if str(result[content_key]).endswith("\n") else "\n")
+    elif result.get("ok"):
+        resolved = result.get("resolved_session")
+        target = result.get("target")
+        if resolved and target != resolved:
+            print(f"ok: {target} -> {resolved}")
+        else:
+            print("ok")
+    else:
+        print(f"emux: {result.get('error') or 'command_failed'}", file=sys.stderr)
+        if result.get("stderr"):
+            print(str(result["stderr"]).rstrip(), file=sys.stderr)
+        if result.get("send_result"):
+            print(json.dumps(result["send_result"], indent=2, sort_keys=True), file=sys.stderr)
+        if result.get("capture_result"):
+            print(json.dumps(result["capture_result"], indent=2, sort_keys=True), file=sys.stderr)
+    return 0 if result.get("ok") else 1
+
+
+def cmd_send(args: argparse.Namespace) -> int:
+    """Send tmux keys to a registered name by default."""
+    keys = _joined_words(args.keys, "keys")
+    result = asyncio.run(tmux_send(
+        target=args.target,
+        keys=keys,
+        enter=not args.no_enter,
+        by_registry_name=not args.session,
+    ))
+    return _print_result(result, as_json=args.json)
+
+
+def cmd_interrupt(args: argparse.Namespace) -> int:
+    """Send C-c to a registered name by default."""
+    result = asyncio.run(tmux_send(
+        target=args.target,
+        keys="C-c",
+        enter=False,
+        by_registry_name=not args.session,
+    ))
+    return _print_result(result, as_json=args.json)
+
+
+def cmd_capture(args: argparse.Namespace) -> int:
+    """Capture a registered name by default."""
+    result = asyncio.run(tmux_capture(
+        target=args.target,
+        lines=args.lines,
+        by_registry_name=not args.session,
+    ))
+    return _print_result(result, as_json=args.json, content_key="content")
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Send a command, wait, then capture."""
+    command = _joined_words(args.command, "command")
+    result = asyncio.run(tmux_run(
+        target=args.target,
+        command=command,
+        wait_seconds=args.wait,
+        capture_lines=args.lines,
+        by_registry_name=not args.session,
+    ))
+    return _print_result(result, as_json=args.json, content_key="content")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="emux",
@@ -334,6 +419,32 @@ def main(argv: list[str] | None = None) -> int:
     p_unreg = sub.add_parser("unregister", help="remove a session from the registry")
     p_unreg.add_argument("name")
 
+    p_send = sub.add_parser("send", help="send keys to a registered session")
+    p_send.add_argument("target", help="registered name by default, or tmux session with --session")
+    p_send.add_argument("keys", nargs="+", help="tmux keys or literal text to send")
+    p_send.add_argument("--no-enter", action="store_true", help="do not append Enter after the keys")
+    p_send.add_argument("--session", action="store_true", help="target a raw tmux session instead of a registry name")
+    p_send.add_argument("--json", action="store_true", help="print structured result JSON")
+
+    p_interrupt = sub.add_parser("interrupt", help="send C-c to a registered session")
+    p_interrupt.add_argument("target", help="registered name by default, or tmux session with --session")
+    p_interrupt.add_argument("--session", action="store_true", help="target a raw tmux session instead of a registry name")
+    p_interrupt.add_argument("--json", action="store_true", help="print structured result JSON")
+
+    p_capture = sub.add_parser("capture", help="capture a registered session pane")
+    p_capture.add_argument("target", help="registered name by default, or tmux session with --session")
+    p_capture.add_argument("--lines", type=int, default=200, help="scrollback lines to capture")
+    p_capture.add_argument("--session", action="store_true", help="target a raw tmux session instead of a registry name")
+    p_capture.add_argument("--json", action="store_true", help="print structured result JSON")
+
+    p_run = sub.add_parser("run", help="send a command, wait, and capture the session")
+    p_run.add_argument("target", help="registered name by default, or tmux session with --session")
+    p_run.add_argument("command", nargs="+", help="command text to send")
+    p_run.add_argument("--wait", type=float, default=2.0, help="seconds to wait before capture")
+    p_run.add_argument("--lines", type=int, default=200, help="scrollback lines to capture")
+    p_run.add_argument("--session", action="store_true", help="target a raw tmux session instead of a registry name")
+    p_run.add_argument("--json", action="store_true", help="print structured result JSON")
+
     args = parser.parse_args(argv)
 
     if args.cmd is None:
@@ -350,6 +461,14 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_register(args)
     if args.cmd == "unregister":
         return cmd_unregister(args)
+    if args.cmd == "send":
+        return cmd_send(args)
+    if args.cmd == "interrupt":
+        return cmd_interrupt(args)
+    if args.cmd == "capture":
+        return cmd_capture(args)
+    if args.cmd == "run":
+        return cmd_run(args)
 
     parser.print_help()
     return 1

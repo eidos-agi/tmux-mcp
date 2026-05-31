@@ -16,6 +16,10 @@ emux mcp          → MCP server. Six tools for agents to drive
 emux ls           → Print registered + live sessions (non-interactive,
                     CI-friendly).
 emux watch        → Watch many registered/live sessions in one terminal.
+emux send         → Send keys or text to a registered/live session.
+emux interrupt    → Send C-c to a registered/live session.
+emux capture      → Capture pane output from a registered/live session.
+emux run          → Send a command, wait, and capture output.
 emux register     → Register a session under a friendly name.
 emux unregister   → Drop a registered name. Doesn't touch tmux.
 ```
@@ -184,6 +188,25 @@ emux watch --once --lines 12
 This is a watcher, not a supervisor. It repeatedly captures visible pane
 content with `tmux capture-pane`; it does not send input, create sessions, or
 decide whether a Claude Code session is blocked.
+
+## Controlling while watching
+
+Keep `emux watch` running in one terminal, then use the control commands from
+another terminal or agent. CLI targets are registry names by default:
+
+```bash
+emux interrupt claude-code
+emux send claude-code "continue, but only run the focused test"
+emux capture claude-code --lines 80
+emux run claude-code "uv run pytest tests/test_basic.py -q" --wait 3 --lines 120
+```
+
+Use `--session` when you want to target a raw tmux session name instead of a
+registered Emux name:
+
+```bash
+emux send --session scratch "pwd"
+```
 
 ## License
 
