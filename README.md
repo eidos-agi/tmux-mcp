@@ -33,17 +33,17 @@ The registry is the same surface for both. Register once interactively, drive fo
 
 ## Install
 
-Via uvx (no pre-install):
+Until the first PyPI release, run directly from Git or from a local checkout:
 
 ```bash
-uvx --from emux emux                  # TUI picker
-uvx --from emux emux mcp              # MCP server
+uvx --from git+https://github.com/eidos-agi/emux.git emux       # TUI picker
+uvx --from git+https://github.com/eidos-agi/emux.git emux mcp   # MCP server
 ```
 
 In a Claude Code marketplace plugin, the `.mcp.json` looks like:
 
 ```json
-{"emux": {"command": "uvx", "args": ["--from", "emux", "emux", "mcp"]}}
+{"emux": {"command": "uv", "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}", "emux", "mcp"]}}
 ```
 
 Local development:
@@ -54,30 +54,36 @@ cd emux
 uv sync
 uv pip install -e ".[dev]"
 uv run pytest
+uv run ruff check .
 ```
 
 ## TUI picker
 
-Running `emux` with no arguments opens a numbered list of choices:
+Running `emux` with no arguments opens a Textual picker with a filter box,
+number-key shortcuts, grouped session lists, and a live preview pane:
 
 ```
-emux v0.1.0 — pick a session to attach
+Registered (live)
+   1  ●  claude-prod  → main
 
-   1  claude-prod   → main           live    — production claude session  #prod #claude
-   2  test-shell    → scratch        live    — scratch tmux for testing   #test
-   3  long-build    → backfill       STALE — tmux session gone   — overnight ETL run
-   4  experiments   unregistered live tmux session
-   5  (register new)  register a new session by typing name + tmux session id
+Registered (stale)
+   2  ●  long-build  → backfill
 
-  pick [1-5], or q to quit:
+Unregistered live tmux
+   3  ○  experiments  unregistered
+
+Actions
+   4  ⊕  (register new)
 ```
 
 - **Registered + live** entries attach immediately on selection (`tmux attach -t <session>`).
-- **Stale** registered entries explain that the underlying tmux session is gone; you can pick again, unregister it, or re-register against a live session.
-- **Live but unregistered** entries offer to register them inline before attaching.
+- **Stale** registered entries warn that the underlying tmux session is gone; they do not attach.
+- **Live but unregistered** entries attach on Enter and can be registered with `r`.
 - **(register new)** prompts for `name`, `session id`, optional `description`, and tags, then optionally attaches.
 
-The TUI is intentionally minimal: stdlib `input()`, no external TUI library. Works in any terminal, including remote SSH, dumb terminals, and CI shells.
+The picker is a terminal UI, not a terminal owner. Sessions are registered with
+Emux for discovery and attached via Emux when selected. tmux still owns the
+session lifecycle.
 
 ## MCP server
 
@@ -116,7 +122,7 @@ print(result["content"])  # tmux pane contents after the command
 - **Existing sessions only.** Never spawns, never kills tmux sessions. Lifecycle is the user's. emux just observes and drives.
 - **Registry is metadata only.** Live state always comes from `tmux list-sessions`. Stale entries are flagged, not auto-deleted — the user decides.
 - **One registry for both surfaces.** TUI and MCP read and write the same JSON. Register interactively, drive from an agent. Or the reverse.
-- **Stdlib TUI.** No `prompt_toolkit`, no `textual`, no `rich`. The picker is `input()` + a numbered list. Keeps install footprint tiny and works in every terminal.
+- **Textual TUI.** The picker uses Textual for filtering, preview, keyboard shortcuts, and grouped session state.
 - **No magic, no recursion guards.** Sending `claude` keystrokes into a session that's already running emux's MCP gives you the recursion you asked for. Be deliberate.
 
 ## Storage
@@ -139,9 +145,28 @@ For backwards compatibility with the prior name (`tmux-mcp`), `$TMUX_MCP_REGISTR
 ## What it does NOT do
 
 - **Doesn't spawn tmux sessions.** Use `tmux new-session` yourself; emux is read/drive only.
+- **Doesn't bypass auth or approvals.** If the controlled session asks Claude Code for login, MFA, approval, or a human decision, Emux only sees and sends terminal text.
 - **Doesn't strip ANSI.** Capture content includes raw bytes from tmux. Strip with `re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', text)` if you need clean output.
 - **Doesn't proxy MCP from inside tmux.** If the tmux session is running its own MCP server, emux only sees the stdin/stdout text — not the structured MCP messages.
 - **Doesn't long-poll.** `tmux_run`'s `wait_seconds` is a fixed sleep. For long commands, prefer `tmux_send` + polling `tmux_capture` until you see the prompt return.
+
+## Claude Code in tmux
+
+Emux can control Claude Code when Claude Code is already running inside tmux:
+
+```bash
+tmux new -s claude-code
+claude
+```
+
+From another terminal or agent, register and drive that existing session:
+
+```bash
+emux register claude-code claude-code -d "Claude Code terminal" -t claude local
+```
+
+Agents can then use `tmux_run(..., by_registry_name=True)` or separate
+send/capture calls against `claude-code`.
 
 ## License
 

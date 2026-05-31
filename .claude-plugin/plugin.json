@@ -1,0 +1,33 @@
+{
+  "name": "emux",
+  "version": "0.1.0",
+  "description": "Eidos mux: TUI picker and MCP server for named tmux sessions.",
+  "author": {
+    "name": "Eidos AGI",
+    "url": "https://github.com/eidos-agi"
+  },
+  "homepage": "https://github.com/eidos-agi/emux",
+  "repository": "https://github.com/eidos-agi/emux",
+  "license": "MIT",
+  "category": "agent-tools",
+  "keywords": [
+    "mcp",
+    "tmux",
+    "claude-code",
+    "terminal",
+    "session-control",
+    "automation"
+  ],
+  "mcpServers": {
+    "emux": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${CLAUDE_PLUGIN_ROOT}",
+        "emux",
+        "mcp"
+      ]
+    }
+  }
+}

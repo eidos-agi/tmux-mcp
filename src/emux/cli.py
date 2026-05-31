@@ -6,9 +6,8 @@
   emux ls           → list registered + live sessions
   emux --version    → print version
 
-The TUI is intentionally minimal: stdlib only, numbered prompt. The picker
-shows registered sessions first (with description and stale flag), then
-live-but-unregistered sessions, then offers to register a new entry. On
+The TUI is a Textual picker. It shows registered live sessions, registered
+stale sessions, live-but-unregistered sessions, and registration actions. On
 selection, exec `tmux attach -t <session>` so the user lands in the actual
 tmux session — no further emux mediation.
 """
