@@ -276,7 +276,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
             if args.once:
                 return 0
             time.sleep(args.interval)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, BrokenPipeError):
         return 0
 
 
