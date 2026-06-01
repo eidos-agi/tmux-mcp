@@ -504,6 +504,151 @@ def test_cmd_run_prints_content_and_supports_raw_session(monkeypatch, capsys):
     assert capsys.readouterr().out == "DONE\n"
 
 
+def test_resolve_session_target_registry_live(monkeypatch):
+    from emux import cli
+
+    monkeypatch.setattr(cli, "_load_registry", lambda: {
+        "alpha": {"session": "real-session", "description": None, "tags": []}
+    })
+    monkeypatch.setattr(cli, "_live_sessions", lambda: [
+        {"name": "real-session", "windows": 1, "created_unix": 1, "attached": False}
+    ])
+
+    ok, session, err = cli._resolve_session_target("alpha", by_registry_name=True)
+
+    assert ok is True
+    assert session == "real-session"
+    assert err is None
+
+
+def test_resolve_session_target_rejects_stale_registry(monkeypatch):
+    from emux import cli
+
+    monkeypatch.setattr(cli, "_load_registry", lambda: {
+        "alpha": {"session": "gone-session", "description": None, "tags": []}
+    })
+    monkeypatch.setattr(cli, "_live_sessions", lambda: [])
+
+    ok, session, err = cli._resolve_session_target("alpha", by_registry_name=True)
+
+    assert ok is False
+    assert session == "gone-session"
+    assert "not live" in err
+
+
+def test_cmd_head_print_command_resolves_registry(monkeypatch, capsys):
+    import argparse
+
+    from emux import cli
+
+    monkeypatch.setattr(cli, "_load_registry", lambda: {
+        "alpha": {"session": "real-session", "description": None, "tags": []}
+    })
+    monkeypatch.setattr(cli, "_live_sessions", lambda: [
+        {"name": "real-session", "windows": 1, "created_unix": 1, "attached": False}
+    ])
+
+    rc = cli.cmd_head(argparse.Namespace(
+        target="alpha",
+        session=False,
+        terminal="auto",
+        window=False,
+        print_command=True,
+    ))
+
+    assert rc == 0
+    assert capsys.readouterr().out == "tmux attach -t real-session\n"
+
+
+def test_cmd_head_opens_iterm_for_raw_session(monkeypatch, capsys):
+    import argparse
+
+    from emux import cli
+
+    calls = []
+
+    monkeypatch.setattr(cli, "_live_sessions", lambda: [
+        {"name": "raw-session", "windows": 1, "created_unix": 1, "attached": False}
+    ])
+
+    def fake_open(session, terminal="auto", new_window=False):
+        calls.append((session, terminal, new_window))
+        return True, "iTerm", None
+
+    monkeypatch.setattr(cli, "_open_terminal_head", fake_open)
+
+    rc = cli.cmd_head(argparse.Namespace(
+        target="raw-session",
+        session=True,
+        terminal="iterm",
+        window=True,
+        print_command=False,
+    ))
+
+    assert rc == 0
+    assert calls == [("raw-session", "iterm", True)]
+    assert "opened iTerm head for raw-session -> raw-session" in capsys.readouterr().out
+
+
+def test_open_iterm_head_builds_command_file(monkeypatch, tmp_path):
+    from emux import cli
+
+    calls = []
+
+    class Result:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(args, capture_output=True, text=True, check=False):
+        calls.append(args)
+        if args[:2] == ["osascript", "-e"] and args[2] == 'id of application "iTerm2"':
+            return Result(0, "com.googlecode.iterm2\n", "")
+        if args[:3] == ["open", "-b", "com.googlecode.iterm2"]:
+            return Result(0, "", "")
+        return Result(1, "", "unexpected")
+
+    monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}" if name in {"osascript", "open"} else None)
+    monkeypatch.setattr(cli.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(cli, "_resolve_tmux", lambda: "/usr/bin/tmux")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    ok, err = cli._open_iterm_head("session with space", new_window=False)
+
+    assert ok is True
+    assert err is None
+    command_files = list(tmp_path.glob("emux-head-*-session-with-space.command"))
+    assert len(command_files) == 1
+    assert "exec tmux attach -t 'session with space'" in command_files[0].read_text()
+    assert any(call[:3] == ["open", "-b", "com.googlecode.iterm2"] for call in calls)
+
+
+def test_open_terminal_head_auto_falls_back_to_terminal(monkeypatch):
+    from emux import cli
+
+    calls = []
+
+    def fake_iterm(session, new_window=False):
+        calls.append(("iterm", session, new_window))
+        return False, "iTerm timeout"
+
+    def fake_terminal(session):
+        calls.append(("terminal", session))
+        return True, None
+
+    monkeypatch.setattr(cli, "_open_iterm_head", fake_iterm)
+    monkeypatch.setattr(cli, "_open_terminal_app_head", fake_terminal)
+
+    ok, app, err = cli._open_terminal_head("alpha", terminal="auto", new_window=True)
+
+    assert ok is True
+    assert app == "Terminal"
+    assert err is None
+    assert calls == [("iterm", "alpha", True), ("terminal", "alpha")]
+
+
 def _tmux_available() -> bool:
     return shutil.which("tmux") is not None
 

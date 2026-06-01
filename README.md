@@ -20,6 +20,7 @@ emux send         → Send keys or text to a registered/live session.
 emux interrupt    → Send C-c to a registered/live session.
 emux capture      → Capture pane output from a registered/live session.
 emux run          → Send a command, wait, and capture output.
+emux head         → Open a real terminal head attached to a session.
 emux register     → Register a session under a friendly name.
 emux unregister   → Drop a registered name. Doesn't touch tmux.
 ```
@@ -207,6 +208,22 @@ registered Emux name:
 ```bash
 emux send --session scratch "pwd"
 ```
+
+## Opening a terminal head
+
+Use `emux head` when you want a real terminal attached to a registered session:
+
+```bash
+emux head claude-code
+emux head claude-code --terminal iterm
+emux head claude-code --terminal terminal
+emux head claude-code --print-command
+```
+
+On macOS, `emux head` tries iTerm2/iTerm first and falls back to Terminal.app if
+iTerm is unavailable or not responding. The head runs `tmux attach -t <session>`
+inside the terminal app, so paste, raw keys, `Ctrl-C`, scrollback, resizing, and
+Claude Code's own terminal UI stay native.
 
 ## License
 

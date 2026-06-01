@@ -8,6 +8,7 @@
   emux interrupt …   → send C-c to a registered/live session
   emux capture …     → capture a registered/live session
   emux run …         → send a command, wait, and capture
+  emux head …        → open a real terminal head for a session
   emux --version    → print version
 
 The TUI is a Textual picker. It shows registered live sessions, registered
@@ -23,8 +24,14 @@ import asyncio
 import datetime as _dt
 import json
 import os
+import platform
+import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 from . import __version__
@@ -391,6 +398,135 @@ def cmd_run(args: argparse.Namespace) -> int:
     return _print_result(result, as_json=args.json, content_key="content")
 
 
+def _resolve_session_target(target: str, by_registry_name: bool) -> tuple[bool, str, str | None]:
+    """Resolve a CLI target to a live tmux session."""
+    session = target
+    if by_registry_name:
+        registry = _load_registry()
+        if target not in registry:
+            return False, "", f"'{target}' is not registered with Emux"
+        session = registry[target]["session"]
+
+    live_names = {s["name"] for s in _live_sessions()}
+    if session not in live_names:
+        return False, session, f"tmux session '{session}' is not live"
+    return True, session, None
+
+
+def _find_iterm_bundle_id() -> str | None:
+    for app_name in ("iTerm2", "iTerm"):
+        result = subprocess.run(
+            ["osascript", "-e", f'id of application "{app_name}"'],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or "com.googlecode.iterm2"
+    return None
+
+
+def _write_head_command_file(session: str) -> Path:
+    command = f"tmux attach -t {shlex.quote(session)}"
+    safe_session = "".join(ch if ch.isalnum() or ch in ".-_" else "-" for ch in session)
+    script_path = Path(tempfile.gettempdir()) / f"emux-head-{os.getpid()}-{safe_session}.command"
+    script_path.write_text(f"#!/bin/zsh\nrm -f \"$0\"\nexec {command}\n")
+    script_path.chmod(0o700)
+    return script_path
+
+
+def _open_iterm_head(session: str, new_window: bool = False) -> tuple[bool, str | None]:
+    """Open iTerm2/iTerm attached to an existing tmux session."""
+    if platform.system() != "Darwin":
+        return False, "emux head currently supports macOS iTerm2/iTerm only"
+    if _resolve_tmux() is None:
+        return False, "tmux not found on PATH"
+    if shutil.which("osascript") is None:
+        return False, "osascript not found on PATH"
+    if shutil.which("open") is None:
+        return False, "macOS open command not found on PATH"
+
+    bundle_id = _find_iterm_bundle_id()
+    if bundle_id is None:
+        return False, "iTerm2/iTerm is not installed or not visible to AppleScript"
+
+    script_path = _write_head_command_file(session)
+
+    open_args = ["open"]
+    if new_window:
+        # `open -n` asks LaunchServices for a new app instance. iTerm may still
+        # choose its configured tab/window behavior, but this is the best
+        # non-AppleScript hint available.
+        open_args.append("-n")
+    open_args.extend(["-b", bundle_id, str(script_path)])
+
+    result = subprocess.run(open_args, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        return False, (result.stderr or result.stdout or "failed to open iTerm head").strip()
+    return True, None
+
+
+def _open_terminal_app_head(session: str) -> tuple[bool, str | None]:
+    """Open macOS Terminal.app attached to an existing tmux session."""
+    if platform.system() != "Darwin":
+        return False, "Terminal.app head currently supports macOS only"
+    if _resolve_tmux() is None:
+        return False, "tmux not found on PATH"
+    if shutil.which("open") is None:
+        return False, "macOS open command not found on PATH"
+
+    script_path = _write_head_command_file(session)
+    result = subprocess.run(
+        ["open", "-a", "Terminal", str(script_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False, (result.stderr or result.stdout or "failed to open Terminal head").strip()
+    return True, None
+
+
+def _open_terminal_head(
+    session: str,
+    terminal: str = "auto",
+    new_window: bool = False,
+) -> tuple[bool, str | None, str | None]:
+    if terminal == "iterm":
+        ok, err = _open_iterm_head(session, new_window=new_window)
+        return ok, "iTerm", err
+    if terminal == "terminal":
+        ok, err = _open_terminal_app_head(session)
+        return ok, "Terminal", err
+
+    iterm_ok, iterm_err = _open_iterm_head(session, new_window=new_window)
+    if iterm_ok:
+        return True, "iTerm", None
+    terminal_ok, terminal_err = _open_terminal_app_head(session)
+    if terminal_ok:
+        return True, "Terminal", None
+    return False, None, f"iTerm failed: {iterm_err}; Terminal failed: {terminal_err}"
+
+
+def cmd_head(args: argparse.Namespace) -> int:
+    """Open a real terminal head for a registered name by default."""
+    ok, session, err = _resolve_session_target(args.target, by_registry_name=not args.session)
+    if not ok:
+        print(f"emux: {err}", file=sys.stderr)
+        return 1
+
+    if args.print_command:
+        print(f"tmux attach -t {shlex.quote(session)}")
+        return 0
+
+    ok, app_name, err = _open_terminal_head(session, terminal=args.terminal, new_window=args.window)
+    if not ok:
+        print(f"emux: {err}", file=sys.stderr)
+        return 1
+    print(f"opened {app_name} head for {args.target} -> {session}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="emux",
@@ -445,6 +581,13 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--session", action="store_true", help="target a raw tmux session instead of a registry name")
     p_run.add_argument("--json", action="store_true", help="print structured result JSON")
 
+    p_head = sub.add_parser("head", help="open a real terminal head for a registered session")
+    p_head.add_argument("target", help="registered name by default, or tmux session with --session")
+    p_head.add_argument("--session", action="store_true", help="target a raw tmux session instead of a registry name")
+    p_head.add_argument("--terminal", choices=["auto", "iterm", "terminal"], default="auto", help="terminal app to open")
+    p_head.add_argument("--window", action="store_true", help="open a new iTerm window instead of a new tab")
+    p_head.add_argument("--print-command", action="store_true", help="print the tmux attach command without opening a terminal")
+
     args = parser.parse_args(argv)
 
     if args.cmd is None:
@@ -469,6 +612,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_capture(args)
     if args.cmd == "run":
         return cmd_run(args)
+    if args.cmd == "head":
+        return cmd_head(args)
 
     parser.print_help()
     return 1
